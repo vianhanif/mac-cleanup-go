@@ -1,0 +1,66 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/jedib0t/go-pretty/v6/text"
+)
+
+func main() {
+	// Install signal handler so Ctrl+C stops any active progress renderer cleanly.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		stopActive()
+		fmt.Println()
+		fmt.Println(text.FgYellow.Sprint("  Interrupted."))
+		os.Exit(1)
+	}()
+
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(0)
+	}
+
+	mode := os.Args[1]
+
+	switch mode {
+	case "overview":
+		RunOverview()
+
+	case "safe":
+		results := RunSafe()
+		PrintCleanupSummary(results, os.Stdout)
+		printDone()
+
+	case "deep":
+		results := RunDeep()
+		PrintCleanupSummary(results, os.Stdout)
+		printDone()
+
+	case "brew":
+		results := RunBrewUpgrade()
+		PrintBrewSummary(results, os.Stdout)
+		printDone()
+
+	case "brew-analyze":
+		RunBrewAnalyze()
+		printDone()
+
+	case "brew-full":
+		RunBrewFull()
+		printDone()
+
+	case "help", "-h", "--help":
+		printUsage()
+
+	default:
+		fmt.Printf("  %s unknown command %q\n\n", text.FgRed.Sprint("✗"), mode)
+		printUsage()
+		os.Exit(1)
+	}
+}

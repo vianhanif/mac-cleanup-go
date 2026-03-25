@@ -194,13 +194,31 @@ type upgradeResult struct {
 	duration time.Duration
 }
 
+// extractErrLine picks the first "Error:" line from brew's stderr output.
+// Brew often prefixes errors with bottle-download progress lines; this skips
+// them so only the actionable message ends up in the progress tracker.
+func extractErrLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "Error:") {
+			return truncate(line, truncErrMsgLen)
+		}
+	}
+	// fallback: first non-empty line
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return truncate(line, truncErrMsgLen)
+		}
+	}
+	return truncate(strings.TrimSpace(s), truncErrMsgLen)
+}
+
 func upgradePackage(pkg brewPkg) upgradeResult {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	res := runCmd(ctx, "brew", "upgrade", pkg.name)
 	if res.err != nil {
-		return upgradeResult{pkg, "", "error", truncate(res.stderr, truncErrMsgLen), time.Since(start)}
+		return upgradeResult{pkg, "", "error", extractErrLine(res.stderr), time.Since(start)}
 	}
 	newVer := pkg.newVer
 	for _, line := range strings.Split(res.stdout, "\n") {
@@ -300,16 +318,19 @@ func RunBrewUpgrade() []BrewUpgradeResult {
 	if len(autoList) > 0 {
 		fmt.Println()
 		upgDoneCh := make(chan phaseItem, len(autoList))
-		resultCh := make(chan upgradeResult, len(autoList))
-		var wg sync.WaitGroup
 
-		for _, pkg := range autoList {
-			pkg := pkg
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		// Brew holds a file lock for the duration of each upgrade, so upgrades
+		// must run sequentially. We dispatch them in a single goroutine and post
+		// each result to upgDoneCh as it finishes so phaseMonitor stays live.
+		go func() {
+			for _, pkg := range autoList {
 				r := upgradePackage(pkg)
-				resultCh <- r
+				allResults = append(allResults, BrewUpgradeResult{
+					Name:     r.pkg.name,
+					Status:   r.status,
+					Detail:   r.detail,
+					Duration: r.duration,
+				})
 				ok := r.status == "ok"
 				detail := r.detail
 				if ok {
@@ -320,20 +341,10 @@ func RunBrewUpgrade() []BrewUpgradeResult {
 					result: detail,
 					ok:     ok,
 				}
-			}()
-		}
-		go func() { wg.Wait(); close(resultCh) }()
+			}
+		}()
 
 		phaseMonitor("Upgrading", len(autoList), upgDoneCh)
-
-		for r := range resultCh {
-			allResults = append(allResults, BrewUpgradeResult{
-				Name:     r.pkg.name,
-				Status:   r.status,
-				Detail:   r.detail,
-				Duration: r.duration,
-			})
-		}
 	}
 
 	for _, pkg := range promptList {
@@ -376,6 +387,54 @@ func RunBrewUpgrade() []BrewUpgradeResult {
 			allResults = append(allResults, BrewUpgradeResult{
 				Name: pkg.name, Status: "skipped", Detail: "user declined",
 			})
+		}
+	}
+
+	// ── Retry failed packages (once) ──────────────────────────────────────
+	var failedPkgs []brewPkg
+	for _, r := range allResults {
+		if r.Status == "error" {
+			failedPkgs = append(failedPkgs, brewPkg{name: r.Name})
+		}
+	}
+	if len(failedPkgs) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s %d package(s) failed. Retry once? [y/N]: ",
+			text.FgYellow.Sprint("!"), len(failedPkgs))
+		retryReader := bufio.NewReader(os.Stdin)
+		retryLine, _ := retryReader.ReadString('\n')
+		if answer := strings.ToLower(strings.TrimSpace(retryLine)); answer == "y" || answer == "yes" {
+			retryDoneCh := make(chan phaseItem, len(failedPkgs))
+
+			// Sequential for the same reason as the first pass — Brew file lock.
+			go func() {
+				for _, pkg := range failedPkgs {
+					r := upgradePackage(pkg)
+					for i, existing := range allResults {
+						if existing.Name == r.pkg.name {
+							allResults[i] = BrewUpgradeResult{
+								Name:     r.pkg.name,
+								Status:   r.status,
+								Detail:   r.detail,
+								Duration: existing.Duration + r.duration,
+							}
+							break
+						}
+					}
+					ok := r.status == "ok"
+					detail := r.detail
+					if ok {
+						detail = fmt.Sprintf("-> %s  (%s)", r.newVer, r.duration.Round(time.Millisecond))
+					}
+					retryDoneCh <- phaseItem{
+						label:  truncate(pkg.name, progressLabelWidth),
+						result: detail,
+						ok:     ok,
+					}
+				}
+			}()
+
+			phaseMonitor("Retrying failed", len(failedPkgs), retryDoneCh)
 		}
 	}
 

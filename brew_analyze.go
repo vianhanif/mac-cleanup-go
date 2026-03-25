@@ -15,9 +15,9 @@ import (
 type issueType int
 
 const (
-	issueDuplicate   issueType = iota
-	issueMultiVer              // stale versioned slot
-	issueClashOrEOL            // matches knownClashes map
+	issueDuplicate  issueType = iota
+	issueMultiVer             // stale versioned slot
+	issueClashOrEOL           // matches knownClashes map
 )
 
 func (t issueType) String() string {
@@ -43,11 +43,12 @@ const (
 // ─── BrewIssue ────────────────────────────────────────────────────────────────
 
 type BrewIssue struct {
-	pkg       string
-	issue     issueType
-	action    actionType
-	blockedBy []string // from brew uses --installed
-	detail    string
+	pkg         string
+	issue       issueType
+	action      actionType
+	blockedBy   []string // from brew uses --installed
+	detail      string
+	alternative string // non-empty for EOL/clash items with a migration target
 }
 
 // ─── Pass A: duplicate detection ─────────────────────────────────────────────
@@ -181,13 +182,18 @@ func detectClashes(installed []string) []BrewIssue {
 		if !installedSet[rule.pkg] {
 			continue
 		}
+		alt := ""
+		if rule.alternative != "" && rule.alternative != "(system)" {
+			alt = rule.alternative
+		}
 		issues = append(issues, BrewIssue{
-			pkg:    rule.pkg,
-			issue:  issueClashOrEOL,
-			action: actionInform, // never auto-remove clashes
+			pkg:         rule.pkg,
+			issue:       issueClashOrEOL,
+			action:      actionInform, // never auto-remove clashes
+			alternative: alt,
 			detail: rule.reason + func() string {
-				if rule.alternative != "" && rule.alternative != "(system)" {
-					return "  →  " + rule.alternative
+				if alt != "" {
+					return "  →  " + alt
 				}
 				return ""
 			}(),
@@ -380,14 +386,19 @@ func RunBrewAnalyze() {
 	}
 
 	if len(infoOnly) > 0 {
-		fmt.Println(text.FgHiBlack.Sprint("  Informational (no action taken):"))
+		fmt.Println(text.FgHiBlack.Sprint("  Informational:"))
 		for _, issue := range infoOnly {
-			fmt.Printf("    [i] %-24s  %s\n", issue.pkg, truncate(issue.detail, 55))
+			if issue.alternative != "" {
+				fmt.Printf("    [→] %-24s  migrate to: %s\n", issue.pkg, issue.alternative)
+			} else {
+				fmt.Printf("    [i] %-24s  %s\n", issue.pkg, truncate(issue.detail, 55))
+			}
 		}
 		fmt.Println()
 	}
 
-	// Offer to apply auto-removable packages.
+	// ── Apply auto-removable packages ──────────────────────────────────────
+	needCleanup := false
 	if len(autoRemove) > 0 {
 		fmt.Printf("  Apply %d auto-removable package(s)? [y/N]: ", len(autoRemove))
 		var answer string
@@ -403,16 +414,101 @@ func RunBrewAnalyze() {
 					fmt.Println(text.FgRed.Sprint("✗ " + err.Error()))
 				} else {
 					fmt.Println(text.FgGreen.Sprint("✓"))
+					needCleanup = true
 				}
 			}
 			fmt.Println()
-			fmt.Print("  Running brew cleanup…")
-			runCmdSimple("brew", "cleanup", "-s") //nolint:errcheck
-			clearLine()
-			fmt.Printf("  %s brew cleanup done\n", text.FgGreen.Sprint("✓"))
 		} else {
-			fmt.Printf("  %s No changes made.\n", text.FgHiBlack.Sprint("–"))
+			fmt.Printf("  %s Skipped auto-removals.\n\n", text.FgHiBlack.Sprint("–"))
 		}
+	}
+
+	// ── Prompt for each package that requires a decision ───────────────────
+	if len(needPrompt) > 0 {
+		fmt.Println(text.Bold.Sprint("── Packages needing your decision"))
+		fmt.Println()
+		for _, issue := range needPrompt {
+			fmt.Printf("  %s  %s\n", text.FgYellow.Sprint("⚠"), text.Bold.Sprint(issue.pkg))
+			fmt.Printf("    Required by : %s\n", strings.Join(issue.blockedBy, ", "))
+			fmt.Printf("    Action      : brew uninstall %s\n", issue.pkg)
+			fmt.Printf("  Remove anyway? [y/N]: ")
+			var ans string
+			fmt.Fscan(os.Stdin, &ans) //nolint:errcheck
+			if a := strings.ToLower(strings.TrimSpace(ans)); a == "y" || a == "yes" {
+				fmt.Printf("  Removing %s… ", issue.pkg)
+				_, err := runCmdSimple("brew", "uninstall", issue.pkg)
+				if err != nil {
+					fmt.Println(text.FgRed.Sprint("✗ " + err.Error()))
+				} else {
+					fmt.Println(text.FgGreen.Sprint("✓"))
+					needCleanup = true
+				}
+			} else {
+				fmt.Printf("  %s Skipped %s\n", text.FgHiBlack.Sprint("–"), issue.pkg)
+			}
+			fmt.Println()
+		}
+	}
+
+	// ── Prompt for clash/EOL items that have a migration target ───────────
+	var migratable []BrewIssue
+	for _, issue := range infoOnly {
+		if issue.alternative != "" {
+			migratable = append(migratable, issue)
+		}
+	}
+	if len(migratable) > 0 {
+		fmt.Println(text.Bold.Sprint("── EOL / Clash migrations"))
+		fmt.Println()
+		for _, issue := range migratable {
+			fmt.Printf("  %s  %s  →  %s\n",
+				text.FgHiBlack.Sprint("ℹ"),
+				text.Bold.Sprint(issue.pkg),
+				text.Bold.Sprint(issue.alternative))
+			fmt.Printf("    Reason : %s\n", issue.detail)
+			// Check whether the alternative is already installed.
+			installed, _ := runCmdSimple("brew", "list", "--formula", issue.alternative)
+			altInstalled := strings.TrimSpace(installed) != ""
+			if altInstalled {
+				fmt.Printf("    Action  : brew uninstall %s  (%s already installed)\n", issue.pkg, issue.alternative)
+				fmt.Printf("  Remove %s? [y/N]: ", issue.pkg)
+			} else {
+				fmt.Printf("    Action  : brew install %s && brew uninstall %s\n", issue.alternative, issue.pkg)
+				fmt.Printf("  Migrate %s → %s? [y/N]: ", issue.pkg, issue.alternative)
+			}
+			var ans string
+			fmt.Fscan(os.Stdin, &ans) //nolint:errcheck
+			if a := strings.ToLower(strings.TrimSpace(ans)); a == "y" || a == "yes" {
+				if !altInstalled {
+					fmt.Printf("  Installing %s… ", issue.alternative)
+					_, err := runCmdSimple("brew", "install", issue.alternative)
+					if err != nil {
+						fmt.Println(text.FgRed.Sprint("✗ " + err.Error()))
+						fmt.Println()
+						continue
+					}
+					fmt.Println(text.FgGreen.Sprint("✓"))
+				}
+				fmt.Printf("  Removing %s… ", issue.pkg)
+				_, err := runCmdSimple("brew", "uninstall", issue.pkg)
+				if err != nil {
+					fmt.Println(text.FgRed.Sprint("✗ " + err.Error()))
+				} else {
+					fmt.Println(text.FgGreen.Sprint("✓"))
+					needCleanup = true
+				}
+			} else {
+				fmt.Printf("  %s Skipped %s\n", text.FgHiBlack.Sprint("–"), issue.pkg)
+			}
+			fmt.Println()
+		}
+	}
+
+	if needCleanup {
+		fmt.Print("  Running brew cleanup…")
+		runCmdSimple("brew", "cleanup", "-s") //nolint:errcheck
+		clearLine()
+		fmt.Printf("  %s brew cleanup done\n", text.FgGreen.Sprint("✓"))
 	}
 
 	fmt.Println()

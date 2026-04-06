@@ -218,7 +218,20 @@ func upgradePackage(pkg brewPkg) upgradeResult {
 	defer cancel()
 	res := runCmd(ctx, "brew", "upgrade", pkg.name)
 	if res.err != nil {
-		return upgradeResult{pkg, "", "error", extractErrLine(res.stderr), time.Since(start)}
+		errMsg := extractErrLine(res.stderr)
+		// brew upgrade can succeed at install but fail at the link step when
+		// conflicting symlinks already exist (e.g. from a previous partial
+		// upgrade). Attempt "brew link --overwrite" as automatic recovery.
+		if strings.Contains(res.stderr, "brew link") || strings.Contains(res.stderr, "link step") {
+			linkCtx, linkCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer linkCancel()
+			linkRes := runCmd(linkCtx, "brew", "link", "--overwrite", pkg.name)
+			if linkRes.err == nil {
+				return upgradeResult{pkg, pkg.newVer, "ok", pkg.newVer, time.Since(start)}
+			}
+			errMsg = "link: " + extractErrLine(linkRes.stderr)
+		}
+		return upgradeResult{pkg, "", "error", errMsg, time.Since(start)}
 	}
 	newVer := pkg.newVer
 	for _, line := range strings.Split(res.stdout, "\n") {

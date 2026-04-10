@@ -1,12 +1,12 @@
 # mac-cleanup-go
 
-A macOS maintenance tool written in Go with an animated terminal UI featuring live progress bars and rounded summary tables.
+A macOS maintenance tool written in Go that helps identify performance bottlenecks and safely clean long-lived system cruft.
 
 ## Features
 
-- **Live progress bars** — animated phase monitors with per-task trackers
+- **Performance-focused maintenance** — helps spot what is slowing down your Mac after long-term use
 - **Parallel execution** — independent tasks fan out as goroutines, results collected via channels
-- **Rounded summary tables** — per-task status, bytes freed, and duration after every run
+- **Terminal progress UI** — live phase updates and per-task summary tables for clarity
 - **Safety-first** — three hard-coded constraints enforced at the `safeDelete()` level, not just in comments
 
 ## Commands
@@ -207,7 +207,7 @@ Results are categorised into **auto-removable**, **prompt**, and **informational
 
 ### `apps`
 
-Scans `/Applications` and `~/Applications` for apps that were **not** installed via the Apple App Store (detected by the absence of a `_MASReceipt/receipt` bundle). Displays a numbered list, lets you pick one or more to remove, confirms once, then deletes the `.app` bundle plus all associated support files.
+Scans `/Applications`, `/Applications/Utilities/`, and `~/Applications` for apps that were **not** installed via the Apple App Store (detected by the absence of a `_MASReceipt/receipt` bundle). Displays a numbered list sorted alphabetically, lets you pick one or more to remove, confirms once, then deletes the `.app` bundle plus all associated support files.
 
 Support file locations cleaned per app:
 
@@ -226,9 +226,10 @@ Flags:
 
 | Flag | Effect |
 | --- | --- |
-| _(none)_ | Interactive select + uninstall |
+| _(none)_ | Interactive select + uninstall (sorted alphabetically) |
 | `--list` | Print the app list only, no prompt |
 | `--dry-run` | Show what would be removed without deleting |
+| `--sort-size` | Sort listing by Total Size descending (largest first) |
 
 ```
 📦 App Uninstaller

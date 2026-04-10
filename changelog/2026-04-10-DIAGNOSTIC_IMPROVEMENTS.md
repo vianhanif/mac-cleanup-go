@@ -127,13 +127,31 @@ func cleanDiagnosticReports() TaskResult {
 
 **Files:** `cleanup.go` (new task), `phases.go` (add to `RunSafe` task list)
 
+### 2.6 Fix CPU % always showing 100%
+
+**Problem:** `collectCPU` sums `%cpu` from `ps -A` across all processes without
+dividing by the number of logical CPUs. On a 10-core Mac, even moderate load
+results in a raw sum far above 100, which is then hard-capped — the bar is
+permanently maxed out and gives no useful signal.
+
+**Fix:** Divide the process sum by `sysctl -n hw.logicalcpu` to normalise to a
+true system-wide percentage (0–100). Additionally, when the result exceeds 70%,
+append the name of the single highest-CPU process inline so the user sees the
+actual culprit without scrolling to the process table.
+
+```
+│ CPU  │ ███████░░░  74%  · highest: Xcode (42.1%)  │
+```
+
+**Files:** `overview.go` (`collectCPU`)
+
 ---
 
 ## 3. Scope summary
 
 | File | Change |
 | --- | --- |
-| `overview.go` | Add `collectTopProcesses`, `collectSwap`, `collectLaunchAgents`, `collectMobileSyncSize`; wire all into `RunOverview` |
+| `overview.go` | Fix `collectCPU` normalization; add `collectTopProcesses`, `collectSwap`, `collectLaunchAgents`, `collectMobileSyncSize`; wire all into `RunOverview` |
 | `cleanup.go` | Add `cleanDiagnosticReports`, `reportDeviceBackups` |
 | `phases.go` | Add `cleanDiagnosticReports` to `RunSafe`; add `reportDeviceBackups` to `RunDeep` |
 | `README.md` | Update `overview` and `deep` sections to document new rows/tasks |

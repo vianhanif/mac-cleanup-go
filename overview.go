@@ -41,23 +41,48 @@ func renderBar(percent int) string {
 // ─── Metric collectors ────────────────────────────────────────────────────────
 
 func collectCPU() metricResult {
-	out, err := runCmdSimple("ps", "-A", "-o", "%cpu")
+	// Collect per-process CPU% and the process name in one pass.
+	out, err := runCmdSimple("ps", "-A", "-o", "%cpu,comm")
 	if err != nil {
 		return metricResult{"CPU", "unavailable", "", false}
 	}
+
+	// Determine logical CPU count to normalise the sum.
+	cpuCountStr, _ := runCmdSimple("sysctl", "-n", "hw.logicalcpu")
+	cpuCount, _ := strconv.Atoi(strings.TrimSpace(cpuCountStr))
+	if cpuCount < 1 {
+		cpuCount = 1
+	}
+
 	var total float64
+	var topName string
+	var topVal float64
 	for _, line := range strings.Split(out, "\n")[1:] { // skip header
-		line = strings.TrimSpace(line)
-		if v, e := strconv.ParseFloat(line, 64); e == nil {
-			total += v
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		v, e := strconv.ParseFloat(fields[0], 64)
+		if e != nil {
+			continue
+		}
+		total += v
+		if v > topVal {
+			topVal = v
+			topName = fields[1]
 		}
 	}
-	// Cap at 100 for display (can exceed with multiple cores).
-	pct := int(total)
+
+	pct := int(total / float64(cpuCount))
 	if pct > 100 {
 		pct = 100
 	}
-	return metricResult{"CPU", fmt.Sprintf("%d%%", pct), renderBar(pct), true}
+
+	value := fmt.Sprintf("%d%%", pct)
+	if pct >= 70 && topName != "" {
+		value += fmt.Sprintf("  · highest: %s (%.1f%%)", topName, topVal)
+	}
+	return metricResult{"CPU", value, renderBar(pct), true}
 }
 
 func collectMemory() metricResult {

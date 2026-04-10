@@ -199,21 +199,41 @@ func collectSwap() metricResult {
 		return metricResult{"Swap", "unavailable", "", false}
 	}
 	// e.g. "vm.swapusage: total = 2048.00M  used = 1536.00M  free = 512.00M  (encrypted)"
-	var used, total string
+	var usedRaw, totalRaw string
 	fields := strings.Fields(out)
 	for i, f := range fields {
 		if f == "used" && i+2 < len(fields) {
-			used = fields[i+2]
+			usedRaw = fields[i+2]
 		}
 		if f == "total" && i+2 < len(fields) {
-			total = fields[i+2]
+			totalRaw = fields[i+2]
 		}
 	}
-	if used == "" {
+	if usedRaw == "" {
 		return metricResult{"Swap", "unavailable", "", false}
 	}
-	value := fmt.Sprintf("%s used of %s", used, total)
-	ok := parseSwapMB(used) <= 1024
+	// Convert sysctl units (e.g. "2212.00M") to bytes for fmtBytes.
+	parseSysctlBytes := func(s string) int64 {
+		s = strings.TrimSpace(s)
+		if len(s) == 0 {
+			return 0
+		}
+		unit := strings.ToUpper(string(s[len(s)-1]))
+		v, _ := strconv.ParseFloat(s[:len(s)-1], 64)
+		switch unit {
+		case "K":
+			return int64(v * 1024)
+		case "M":
+			return int64(v * 1024 * 1024)
+		case "G":
+			return int64(v * 1024 * 1024 * 1024)
+		}
+		return int64(v)
+	}
+	usedBytes := parseSysctlBytes(usedRaw)
+	totalBytes := parseSysctlBytes(totalRaw)
+	value := fmt.Sprintf("%s used of %s", fmtBytes(usedBytes), fmtBytes(totalBytes))
+	ok := parseSwapMB(usedRaw) <= 1024
 	return metricResult{"Swap", value, "", ok}
 }
 
@@ -302,6 +322,9 @@ func collectTopDirs(n int) []dirEntry {
 		if strings.HasPrefix(e.Name(), ".") {
 			continue // skip hidden dirs like .config, .ssh, etc.
 		}
+		if !e.IsDir() {
+			continue // skip files like jmeter.log
+		}
 		fullPath := filepath.Join(home, e.Name())
 		// du -sk returns size in 512-byte blocks on macOS when -k, so kb.
 		out, err := exec.Command("du", "-sk", fullPath).Output()
@@ -380,7 +403,7 @@ func collectVerboseProcesses() []processEntry {
 			memStr: fmtBytes(func() int64 { v, _ := strconv.ParseInt(fields[2], 10, 64); return v * 1024 }()),
 			state:  fields[3],
 			etime:  fields[4],
-			name:   fields[5],
+			name:   filepath.Base(fields[5]),
 		})
 	}
 	return items
@@ -409,7 +432,7 @@ func collectTopProcesses(n int) []processEntry {
 		if cpu == 0 && rss < 1024 {
 			continue
 		}
-		items = append(items, rawProc{cpu, rss, name})
+		items = append(items, rawProc{cpu, rss, filepath.Base(name)})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].cpu > items[j].cpu })
 	if len(items) > n {

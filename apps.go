@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ type AppInfo struct {
 	Path         string
 	BundleID     string
 	Version      string
+	Executable   string   // CFBundleExecutable — binary name used for process termination
 	TotalBytes   int64    // pre-computed: .app bundle + all support files
 	SupportPaths []string // resolved ~/Library paths deleted on uninstall
 }
@@ -40,22 +42,29 @@ type AppUninstallResult struct {
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
 
-// discoverNonAppStoreApps scans /Applications and ~/Applications and returns
-// apps that were not installed via the Apple App Store.
+// discoverNonAppStoreApps scans /Applications, /Applications/Utilities, and
+// ~/Applications and returns apps not installed via the Apple App Store.
 func discoverNonAppStoreApps() ([]AppInfo, error) {
 	searchDirs := []string{
 		"/Applications",
+		"/Applications/Utilities",
 		expandHome("~/Applications"),
 	}
 
 	var apps []AppInfo
 	seen := make(map[string]bool)
+	allFailed := true
+	var firstErr error
 
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue // dir may not exist
 		}
+		allFailed = false
 		for _, entry := range entries {
 			if !strings.HasSuffix(entry.Name(), ".app") {
 				continue
@@ -73,6 +82,15 @@ func discoverNonAppStoreApps() ([]AppInfo, error) {
 			apps = append(apps, readAppInfo(appPath))
 		}
 	}
+
+	if allFailed && firstErr != nil {
+		return nil, firstErr
+	}
+
+	// Sort alphabetically by name (case-insensitive) for a stable listing.
+	sort.Slice(apps, func(i, j int) bool {
+		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+	})
 
 	// Pre-compute size for each app in parallel.
 	var wg sync.WaitGroup
@@ -101,8 +119,8 @@ func isAppStoreApp(appPath string) bool {
 	return err == nil
 }
 
-// readAppInfo extracts display name, bundle ID, and version from Info.plist
-// using the macOS-native plutil tool (no extra dependencies required).
+// readAppInfo extracts display name, bundle ID, executable name, and version
+// from Info.plist using the macOS-native plutil tool (no extra dependencies).
 func readAppInfo(appPath string) AppInfo {
 	name := strings.TrimSuffix(filepath.Base(appPath), ".app")
 	info := AppInfo{Name: name, Path: appPath}
@@ -123,6 +141,9 @@ func readAppInfo(appPath string) AppInfo {
 	}
 	if v, ok := plist["CFBundleShortVersionString"].(string); ok {
 		info.Version = v
+	}
+	if v, ok := plist["CFBundleExecutable"].(string); ok {
+		info.Executable = v
 	}
 	// Prefer display name, fall back to bundle name, then the filename-derived name.
 	if v, ok := plist["CFBundleDisplayName"].(string); ok && v != "" {
@@ -223,7 +244,12 @@ func uninstallApp(app AppInfo, dryRun bool) AppUninstallResult {
 	}
 
 	// Best-effort: terminate the process before removing files.
-	exec.Command("pkill", "-x", app.Name).Run() //nolint:errcheck
+	// Use CFBundleExecutable (binary name) which is what pkill matches against.
+	binary := app.Executable
+	if binary == "" {
+		binary = app.Name
+	}
+	exec.Command("pkill", "-x", binary).Run() //nolint:errcheck
 
 	var totalFreed int64
 	var removed []string
@@ -319,13 +345,18 @@ func PrintAppUninstallSummary(results []AppUninstallResult, dryRun bool, out io.
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 // RunApps is the entry point for the `mac-cleanup apps` command.
-func RunApps(listOnly, dryRun bool) {
+func RunApps(listOnly, dryRun, sortBySize bool) {
 	fmt.Println()
 
 	var apps []AppInfo
+	var discoverErr error
 	runWithSpinner("Scanning applications and computing sizes…", func() {
-		apps, _ = discoverNonAppStoreApps()
+		apps, discoverErr = discoverNonAppStoreApps()
 	})
+
+	if discoverErr != nil {
+		fmt.Printf("  %s  scan warning: %s\n\n", text.FgYellow.Sprint("!"), discoverErr)
+	}
 
 	if len(apps) == 0 {
 		fmt.Println(text.FgGreen.Sprint("  ✓ No non-App-Store applications found."))
@@ -337,6 +368,12 @@ func RunApps(listOnly, dryRun bool) {
 		text.FgGreen.Sprint("✓"),
 		text.Bold.Sprint(fmt.Sprintf("%d", len(apps))),
 	)
+
+	if sortBySize {
+		sort.Slice(apps, func(i, j int) bool {
+			return apps[i].TotalBytes > apps[j].TotalBytes
+		})
+	}
 
 	if listOnly {
 		printAppList(apps)

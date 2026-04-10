@@ -202,12 +202,15 @@ func printUsage() {
 		{
 			"apps",
 			"App uninstaller",
-			"Lists all non-App-Store applications, lets you select\n" +
-				"                     one or more to remove, then cleanly uninstalls\n" +
-				"                     each one — deleting the .app bundle plus all\n" +
-				"                     associated caches, preferences, containers, and\n" +
-				"                     support files.  Flags: --list (list only),\n" +
-				"                     --dry-run (preview without deleting).",
+			"Lists all non-App-Store applications (/Applications,\n" +
+				"                     /Applications/Utilities, ~/Applications),\n" +
+				"                     lets you select one or more to remove, then\n" +
+				"                     cleanly uninstalls each one — deleting the\n" +
+				"                     .app bundle plus all associated caches,\n" +
+				"                     preferences, containers, and support files.\n" +
+				"                     Flags: --list (list only),\n" +
+				"                     --dry-run (preview without deleting),\n" +
+				"                     --sort-size (largest apps first).",
 		},
 		{
 			"help",

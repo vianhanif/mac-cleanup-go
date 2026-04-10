@@ -1,21 +1,21 @@
 # mac-cleanup-go
 
-A macOS maintenance tool written in Go with an animated terminal UI featuring live progress bars and rounded summary tables.
+A macOS maintenance tool written in Go that helps identify performance bottlenecks and safely clean long-lived system cruft.
 
 ## Features
 
-- **Live progress bars** — animated phase monitors with per-task trackers
+- **Performance-focused maintenance** — helps spot what is slowing down your Mac after long-term use
 - **Parallel execution** — independent tasks fan out as goroutines, results collected via channels
-- **Rounded summary tables** — per-task status, bytes freed, and duration after every run
+- **Terminal progress UI** — live phase updates and per-task summary tables for clarity
 - **Safety-first** — three hard-coded constraints enforced at the `safeDelete()` level, not just in comments
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `mac-cleanup overview` | System dashboard — CPU, Memory, Disk, top dirs, Brew, Docker |
-| `mac-cleanup safe` | Safe cleanup — caches, logs, Xcode DerivedData, Time Machine thin |
-| `mac-cleanup deep` | Deep cleanup — safe + Docker prune + node_modules size report |
+| `mac-cleanup overview` | System dashboard — CPU, Memory, Swap, Disk, Launch Agents, Device Backups, Brew, Docker, top processes |
+| `mac-cleanup safe` | Safe cleanup — caches, logs, Xcode DerivedData, Time Machine thin, diagnostic reports |
+| `mac-cleanup deep` | Deep cleanup — safe + Docker prune + node_modules report + device backup report |
 | `mac-cleanup brew` | Smart Homebrew upgrade — risk-scored, dependency-aware |
 | `mac-cleanup brew-analyze` | Homebrew package audit — duplicates, stale versions, EOL/clashes |
 | `mac-cleanup brew-full` | `brew-analyze` then `brew` upgrade in one run |
@@ -62,23 +62,26 @@ mac-cleanup <command>
 
 ### `overview`
 
-Collects system metrics in parallel and renders two tables — system stats and top home directories.
+Collects system metrics in parallel and renders three sections — system stats, top home directories, and top processes by CPU.
 
 ```
 🖥  System Dashboard
 ────────────────────────────────────────────────────────
 
-╭──────────────────┬──────────────────────────────────────╮
-│ CPU              │ ██████░░░░  58%                       │
-│ Memory           │ ████░░░░░░  40%                       │
-│ Disk /           │ ███████░░░  72%  89 GB used of 500 GB │
-│ Brew Outdated    │ 4 packages                            │
-│ Docker           │ running · 2.1 GB reclaimable          │
-├──────────────────┼──────────────────────────────────────┤
-│ Hostname         │ alvian-mbp                            │
-│ macOS            │ 15.3.2                                │
-│ Uptime           │ 3 days                                │
-╰──────────────────┴──────────────────────────────────────╯
+╭──────────────────┬──────────────────────────────────────────────────────────╮
+│ CPU              │ ██████░░░░  58%                                           │
+│ Memory           │ ████░░░░░░  40%                                           │
+│ Disk /           │ ███████░░░  72%  89 GB used of 500 GB                     │
+│ Brew Outdated    │ 4 packages                                                │
+│ Docker           │ running · 2.1 GB reclaimable                              │
+│ Swap             │ 2.4 GB used of 8.0 GB                                     │
+│ Launch Agents    │ 14 item(s) · review in System Settings → Login Items      │
+│ Device Backups   │ 28G · 3 backup(s)                                         │
+├──────────────────┼──────────────────────────────────────────────────────────┤
+│ Hostname         │ alvian-mbp                                                │
+│ macOS Version    │ 15.3.2                                                    │
+│ System Uptime    │ 3 days                                                    │
+╰──────────────────┴──────────────────────────────────────────────────────────╯
 
 ── Top Home Directories
 
@@ -88,6 +91,16 @@ Collects system metrics in parallel and renders two tables — system stats and 
 │ ~/Library        │ 48 GB    │
 │ ~/Documents      │ 12 GB    │
 ╰──────────────────┴──────────╯
+
+── Top Processes (by CPU)
+
+╭──────────────────────────┬──────────┬───────────╮
+│ Process                  │   CPU %  │    Memory │
+├──────────────────────────┼──────────┼───────────┤
+│ Xcode                    │   42.1%  │    1.8 GB │
+│ Google Chrome Helper     │   18.3%  │   512 MB  │
+│ coreaudiod               │    9.2%  │    48 MB  │
+╰──────────────────────────┴──────────┴───────────╯
 ```
 
 ### `safe`
@@ -98,23 +111,25 @@ Cleans in parallel, then shows a summary table.
 🧹 macOS Maintenance  · safe
 ────────────────────────────────────────────────────────
 
-  Cleaning  3 / 4  [████████░░]  2s
-    User Caches              ✓  843 MB freed   0.4s
-    User Logs                ✓   12 MB freed   0.1s
-    Xcode DerivedData        ✓  2.1 GB freed   0.2s
-    TM Snapshots             ✓  thinned        1.8s
+  Cleaning  4 / 5  [████████░░]  2s
+    User Caches              ✓  843 MB freed          0.4s
+    User Logs                ✓   12 MB freed          0.1s
+    Xcode DerivedData        ✓  2.1 GB freed          0.2s
+    TM Snapshots             ✓  thinned               1.8s
+    Diagnostic Reports       ✓  18 file(s) removed    0.1s
 
 ── Summary
-╭──────────────────────┬────────┬──────────────┬────────╮
-│ Task                 │ Status │ Result       │ Time   │
-├──────────────────────┼────────┼──────────────┼────────┤
-│ User Caches          │   ✓    │ 843 MB freed │ 0.4s   │
-│ User Logs            │   ✓    │  12 MB freed │ 0.1s   │
-│ Xcode DerivedData    │   ✓    │ 2.1 GB freed │ 0.2s   │
-│ TM Snapshots         │   ✓    │ thinned      │ 1.8s   │
-├──────────────────────┼────────┼──────────────┼────────┤
-│ Total                │  4/4   │ 2.96 GB freed│        │
-╰──────────────────────┴────────┴──────────────┴────────╯
+╭──────────────────────┬────────┬───────────────────────┬────────╮
+│ Task                 │ Status │ Result                │ Time   │
+├──────────────────────┼────────┼───────────────────────┼────────┤
+│ User Caches          │   ✓    │ 843 MB freed          │ 0.4s   │
+│ User Logs            │   ✓    │  12 MB freed          │ 0.1s   │
+│ Xcode DerivedData    │   ✓    │ 2.1 GB freed          │ 0.2s   │
+│ TM Snapshots         │   ✓    │ thinned               │ 1.8s   │
+│ Diagnostic Reports   │   ✓    │ 18 file(s) removed    │ 0.1s   │
+├──────────────────────┼────────┼───────────────────────┼────────┤
+│ Total                │  5/5   │ 2.96 GB freed         │        │
+╰──────────────────────┴────────┴───────────────────────┴────────╯
 ```
 
 ### `brew`
@@ -207,7 +222,7 @@ Results are categorised into **auto-removable**, **prompt**, and **informational
 
 ### `apps`
 
-Scans `/Applications` and `~/Applications` for apps that were **not** installed via the Apple App Store (detected by the absence of a `_MASReceipt/receipt` bundle). Displays a numbered list, lets you pick one or more to remove, confirms once, then deletes the `.app` bundle plus all associated support files.
+Scans `/Applications`, `/Applications/Utilities/`, and `~/Applications` for apps that were **not** installed via the Apple App Store (detected by the absence of a `_MASReceipt/receipt` bundle). Displays a numbered list sorted alphabetically, lets you pick one or more to remove, confirms once, then deletes the `.app` bundle plus all associated support files.
 
 Support file locations cleaned per app:
 
@@ -226,9 +241,10 @@ Flags:
 
 | Flag | Effect |
 | --- | --- |
-| _(none)_ | Interactive select + uninstall |
+| _(none)_ | Interactive select + uninstall (sorted alphabetically) |
 | `--list` | Print the app list only, no prompt |
 | `--dry-run` | Show what would be removed without deleting |
+| `--sort-size` | Sort listing by Total Size descending (largest first) |
 
 ```
 📦 App Uninstaller
@@ -315,6 +331,7 @@ These are enforced in code at the `safeDelete()` level — not just documentatio
 | `/System/`, `/usr/`, `/bin/`… | `neverTouchPaths` hard block |
 | Browser cache dirs | `cacheExclusions` list |
 | `node_modules/` directories | reported only in `deep` mode, never deleted |
+| iOS/device backups | reported only in `deep` mode, never deleted |
 | Pinned brew packages | `brew list --pinned` checked before any upgrade |
 
 ## Code Structure

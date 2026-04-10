@@ -64,7 +64,7 @@ mac-cleanup <command>
 
 Collects system metrics in parallel and renders three sections — system stats, top home directories, and top processes by CPU.
 
-Add `--verbose` for expanded diagnostics: top 10 by CPU, top 10 by memory (separate sort), PID + runtime columns, and a zombie/stuck process detector. Strictly read-only — no processes are killed.
+Add `--verbose` for expanded diagnostics: top 10 by CPU, top 10 by memory (separate sort), PID + start time + running-for columns, and a zombie/stuck process detector. Strictly read-only — no processes are killed.
 
 ```
 mac-cleanup overview            # compact view (top 5 by CPU)
@@ -108,6 +108,47 @@ mac-cleanup overview --verbose  # full diagnostic view
 │ Google Chrome Helper     │   18.3%  │   512 MB  │
 │ coreaudiod               │    9.2%  │    48 MB  │
 ╰──────────────────────────┴──────────┴───────────╯
+```
+
+With `--verbose`, the process section expands to three panels with PID, start time, and duration columns:
+
+```
+── Top Processes (by CPU) — verbose
+
+╭───────┬─────────────────────────────────┬───────┬────────┬──────────────┬─────────────╮
+│ PID   │ PROCESS                         │ CPU % │ MEMORY │ STARTED      │ RUNNING FOR │
+├───────┼─────────────────────────────────┼───────┼────────┼──────────────┼─────────────┤
+│ 280   │ com.manageengine.appctrl.driver │ 89.3% │  11 MB │ Apr 8, 13:50 │      1d 23h │
+│ 67261 │ WindowServer                    │ 16.8% │  46 MB │ Apr 9, 16:16 │     20h 46m │
+│ 162   │ trustd                          │ 10.1% │   7 MB │ Apr 8, 13:50 │      1d 23h │
+│ 68174 │ stable                          │  4.5% │  98 MB │  Today 08:26 │      4h 35m │
+│ 68242 │ CursorUIViewService             │  3.7% │  12 MB │  Today 08:26 │      4h 35m │
+│ 68361 │ Lark                            │  1.8% │  86 MB │  Today 08:26 │      4h 35m │
+│ 77424 │ Lark Helper (Renderer)          │  1.7% │ 228 MB │  Today 11:16 │      1h 46m │
+╰───────┴─────────────────────────────────┴───────┴────────┴──────────────┴─────────────╯
+
+── Top Processes (by Memory) — verbose
+
+╭───────┬─────────────────────────────────┬───────┬────────┬──────────────┬─────────────╮
+│ PID   │ PROCESS                         │ CPU % │ MEMORY │ STARTED      │ RUNNING FOR │
+├───────┼─────────────────────────────────┼───────┼────────┼──────────────┼─────────────┤
+│ 86502 │ Code Helper (Plugin)            │  0.1% │ 544 MB │  Today 12:30 │     32m 27s │
+│ 86312 │ Code Helper (Renderer)          │  0.0% │ 426 MB │  Today 12:29 │      33m 7s │
+│ 285   │ mds_stores                      │  0.0% │ 322 MB │ Apr 8, 13:50 │      1d 23h │
+│ 77424 │ Lark Helper (Renderer)          │  1.7% │ 228 MB │  Today 11:16 │      1h 46m │
+│ 68173 │ Google Chrome                   │  1.0% │ 169 MB │  Today 08:26 │      4h 35m │
+│ 86308 │ Code                            │  0.9% │ 148 MB │  Today 12:29 │      33m 8s │
+╰───────┴─────────────────────────────────┴───────┴────────┴──────────────┴─────────────╯
+
+── Zombie / Stuck Processes
+
+╭───────┬───────────┬────────┬────────╮
+│ PID   │ PROCESS   │ STATE  │ MEMORY │
+├───────┼───────────┼────────┼────────┤
+│ 90463 │ <defunct> │ zombie │    0 B │
+╰───────┴───────────┴────────┴────────╯
+  ℹ  Zombie/stuck processes are not killed automatically.
+  ℹ  Use Activity Monitor to investigate and force-quit if needed.
 ```
 
 ### `safe`

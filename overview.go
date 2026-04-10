@@ -403,7 +403,7 @@ func collectVerboseProcesses() []processEntry {
 			memStr: fmtBytes(func() int64 { v, _ := strconv.ParseInt(fields[2], 10, 64); return v * 1024 }()),
 			state:  fields[3],
 			etime:  fields[4],
-			name:   filepath.Base(fields[5]),
+			name:   filepath.Base(strings.Join(fields[5:], " ")),
 		})
 	}
 	return items
@@ -428,7 +428,7 @@ func collectTopProcesses(n int) []processEntry {
 		}
 		cpu, _ := strconv.ParseFloat(fields[0], 64)
 		rss, _ := strconv.ParseInt(fields[1], 10, 64)
-		name := fields[2]
+		name := strings.Join(fields[2:], " ")
 		if cpu == 0 && rss < 1024 {
 			continue
 		}
@@ -530,7 +530,62 @@ func collectZombieProcesses(all []processEntry) []processEntry {
 	return result
 }
 
-// renderProcTable prints a verbose process table with PID, Process, CPU%, Memory, Runtime columns.
+// parseEtime converts ps etime strings ([[DD-]HH:]MM:SS) to a time.Duration.
+func parseEtime(etime string) time.Duration {
+	var days, hours, mins, secs int
+	// split on '-' first (days component)
+	if idx := strings.IndexByte(etime, '-'); idx >= 0 {
+		fmt.Sscanf(etime[:idx], "%d", &days)
+		etime = etime[idx+1:]
+	}
+	parts := strings.Split(etime, ":")
+	switch len(parts) {
+	case 3:
+		fmt.Sscanf(parts[0], "%d", &hours)
+		fmt.Sscanf(parts[1], "%d", &mins)
+		fmt.Sscanf(parts[2], "%d", &secs)
+	case 2:
+		fmt.Sscanf(parts[0], "%d", &mins)
+		fmt.Sscanf(parts[1], "%d", &secs)
+	}
+	return time.Duration(days)*24*time.Hour +
+		time.Duration(hours)*time.Hour +
+		time.Duration(mins)*time.Minute +
+		time.Duration(secs)*time.Second
+}
+
+// etimeColumns returns ("Started", "Running For") human-readable strings from a ps etime value.
+func etimeColumns(etime string) (started, runFor string) {
+	d := parseEtime(etime)
+	startTime := time.Now().Add(-d)
+
+	// "Since when?" — show date only if not today
+	if startTime.YearDay() == time.Now().YearDay() && startTime.Year() == time.Now().Year() {
+		started = "Today " + startTime.Format("15:04")
+	} else {
+		started = startTime.Format("Jan 2, 15:04")
+	}
+
+	// "How long?" — compact human duration
+	total := int(d.Seconds())
+	switch {
+	case total < 60:
+		runFor = fmt.Sprintf("%ds", total)
+	case total < 3600:
+		runFor = fmt.Sprintf("%dm %ds", total/60, total%60)
+	case total < 86400:
+		h := total / 3600
+		m := (total % 3600) / 60
+		runFor = fmt.Sprintf("%dh %dm", h, m)
+	default:
+		ddays := total / 86400
+		h := (total % 86400) / 3600
+		runFor = fmt.Sprintf("%dd %dh", ddays, h)
+	}
+	return
+}
+
+// renderProcTable prints a verbose process table with PID, Process, CPU%, Memory, Started, Running For columns.
 // An optional hint is printed below the table for the first entry.
 func renderProcTable(title string, procs []processEntry) {
 	if len(procs) == 0 {
@@ -542,16 +597,18 @@ func renderProcTable(title string, procs []processEntry) {
 	tp := table.NewWriter()
 	tp.SetOutputMirror(os.Stdout)
 	tp.SetStyle(table.StyleRounded)
-	tp.AppendHeader(table.Row{"PID", "Process", "CPU %", "Memory", "Runtime"})
+	tp.AppendHeader(table.Row{"PID", "Process", "CPU %", "Memory", "Started", "Running For"})
 	tp.SetColumnConfigs([]table.ColumnConfig{
 		{Number: 1, WidthMax: 7},
 		{Number: 2, WidthMax: 34},
 		{Number: 3, WidthMax: 8, Align: text.AlignRight},
 		{Number: 4, WidthMax: 10, Align: text.AlignRight},
-		{Number: 5, WidthMax: 12, Align: text.AlignRight},
+		{Number: 5, WidthMax: 14, Align: text.AlignRight},
+		{Number: 6, WidthMax: 11, Align: text.AlignRight},
 	})
 	for _, p := range procs {
-		tp.AppendRow(table.Row{p.pid, p.name, p.cpuPct, p.memStr, p.etime})
+		started, runFor := etimeColumns(p.etime)
+		tp.AppendRow(table.Row{p.pid, p.name, p.cpuPct, p.memStr, started, runFor})
 	}
 	tp.Render()
 	if hint := processHint(procs[0].name); hint != "" {

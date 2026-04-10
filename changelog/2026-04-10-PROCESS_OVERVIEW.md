@@ -39,29 +39,32 @@ Normal mode shows: `Process · CPU% · Memory`
 | Column | Source | Why useful |
 | --- | --- | --- |
 | **PID** | `ps -axo pid` | Lets the user cross-reference in Activity Monitor or run `kill` manually if they choose to |
-| **Running time** | `ps -axo etime` | A process that has been at 40% CPU for 3 days is very different from one that spiked 10 seconds ago |
+| **Running time** | `ps -axo etime` | A process that has been at 40% CPU for 3 days is very different from one that spiked 10 seconds ago. Rendered as two columns: **Started** ("Today HH:MM" or "Mon D, HH:MM") and **Running For** (e.g. `1d 23h`, `4h 35m`, `32m 27s`) |
 
 ```
 ── Top Processes (by CPU) — verbose
 
-╭───────┬──────────────────────────────┬──────────┬───────────┬────────────╮
-│ PID   │ Process                      │   CPU %  │    Memory │    Runtime │
-├───────┼──────────────────────────────┼──────────┼───────────┼────────────┤
-│ 1847  │ Xcode                        │   42.1%  │    1.8 GB │    2:14:03 │
-│ 3201  │ Google Chrome Helper         │   18.3%  │   512 MB  │    0:08:11 │
-│ 892   │ coreaudiod                   │    9.2%  │    48 MB  │  3d 04:12  │
-│ 7741  │ com.apple.WebKit.Networking  │    6.1%  │   230 MB  │    1:02:44 │
-╰───────┴──────────────────────────────┴──────────┴───────────┴────────────╯
+╭───────┬─────────────────────────────────┬───────┬────────┬──────────────┬─────────────╮
+│ PID   │ PROCESS                         │ CPU % │ MEMORY │ STARTED      │ RUNNING FOR │
+├───────┼─────────────────────────────────┼───────┼────────┼──────────────┼─────────────┤
+│ 280   │ com.manageengine.appctrl.driver │ 89.3% │  11 MB │ Apr 8, 13:50 │      1d 23h │
+│ 67261 │ WindowServer                    │ 16.8% │  46 MB │ Apr 9, 16:16 │     20h 46m │
+│ 162   │ trustd                          │ 10.1% │   7 MB │ Apr 8, 13:50 │      1d 23h │
+│ 68174 │ stable                          │  4.5% │  98 MB │  Today 08:26 │      4h 35m │
+│ 77424 │ Lark Helper (Renderer)          │  1.7% │ 228 MB │  Today 11:16 │      1h 46m │
+╰───────┴─────────────────────────────────┴───────┴────────┴──────────────┴─────────────╯
 
 ── Top Processes (by Memory) — verbose
 
-╭───────┬──────────────────────────────┬──────────┬───────────┬────────────╮
-│ PID   │ Process                      │   CPU %  │    Memory │    Runtime │
-├───────┼──────────────────────────────┼──────────┼───────────┼────────────┤
-│ 1847  │ Xcode                        │   42.1%  │    1.8 GB │    2:14:03 │
-│ 5512  │ Simulator                    │    0.2%  │    1.1 GB │    0:44:18 │
-│ 3201  │ Google Chrome Helper         │   18.3%  │   512 MB  │    0:08:11 │
-╰───────┴──────────────────────────────┴──────────┴───────────┴────────────╯
+╭───────┬─────────────────────────────────┬───────┬────────┬──────────────┬─────────────╮
+│ PID   │ PROCESS                         │ CPU % │ MEMORY │ STARTED      │ RUNNING FOR │
+├───────┼─────────────────────────────────┼───────┼────────┼──────────────┼─────────────┤
+│ 86502 │ Code Helper (Plugin)            │  0.1% │ 544 MB │  Today 12:30 │     32m 27s │
+│ 86312 │ Code Helper (Renderer)          │  0.0% │ 426 MB │  Today 12:29 │      33m 7s │
+│ 285   │ mds_stores                      │  0.0% │ 322 MB │ Apr 8, 13:50 │      1d 23h │
+│ 77424 │ Lark Helper (Renderer)          │  1.7% │ 228 MB │  Today 11:16 │      1h 46m │
+│ 68173 │ Google Chrome                   │  1.0% │ 169 MB │  Today 08:26 │      4h 35m │
+╰───────┴─────────────────────────────────┴───────┴────────┴──────────────┴─────────────╯
 
 ── Zombie / Stuck Processes
 

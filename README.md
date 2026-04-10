@@ -64,6 +64,13 @@ mac-cleanup <command>
 
 Collects system metrics in parallel and renders three sections — system stats, top home directories, and top processes by CPU.
 
+Add `--verbose` for expanded diagnostics: top 10 by CPU, top 10 by memory (separate sort), PID + runtime columns, and a zombie/stuck process detector. Strictly read-only — no processes are killed.
+
+```
+mac-cleanup overview            # compact view (top 5 by CPU)
+mac-cleanup overview --verbose  # full diagnostic view
+```
+
 ```
 🖥  System Dashboard
 ────────────────────────────────────────────────────────

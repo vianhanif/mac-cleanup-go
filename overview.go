@@ -332,9 +332,58 @@ func collectTopDirs(n int) []dirEntry {
 // ─── Top process entries ──────────────────────────────────────────────────────
 
 type processEntry struct {
+	pid    string
 	name   string
 	cpuPct string
 	memStr string
+	state  string // process state from ps (e.g. Z for zombie)
+	etime  string // elapsed running time from ps
+}
+
+// processHint returns a one-line contextual hint for known process patterns.
+func processHint(name string) string {
+	name = strings.ToLower(filepath.Base(name))
+	switch {
+	case name == "xcode" || name == "xcodebuild":
+		return "Xcode build in progress — normal during compilation"
+	case strings.HasPrefix(name, "google chrome helper"), name == "google chrome helper (renderer)":
+		return "Browser renderer — consider closing idle tabs"
+	case name == "safari web content", name == "safari":
+		return "Browser renderer — consider closing idle tabs"
+	case name == "mds" || name == "mdworker" || strings.HasPrefix(name, "mdworker"):
+		return "Spotlight indexing — usually settles within minutes"
+	case name == "com.apple.cloudd" || name == "bird":
+		return "iCloud sync — normal after large file changes"
+	case name == "kernel_task":
+		return "Thermal throttling — check ambient temp or blocked vents"
+	default:
+		return ""
+	}
+}
+
+// collectVerboseProcesses collects all user-space processes with pid, cpu, rss,
+// state, etime, and comm in one ps invocation. Read-only — no signals sent.
+func collectVerboseProcesses() []processEntry {
+	out, err := runCmdSimple("ps", "-axo", "pid,%cpu,rss,state,etime,comm")
+	if err != nil {
+		return nil
+	}
+	var items []processEntry
+	for _, line := range strings.Split(out, "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		items = append(items, processEntry{
+			pid:    fields[0],
+			cpuPct: fields[1] + "%",
+			memStr: fmtBytes(func() int64 { v, _ := strconv.ParseInt(fields[2], 10, 64); return v * 1024 }()),
+			state:  fields[3],
+			etime:  fields[4],
+			name:   fields[5],
+		})
+	}
+	return items
 }
 
 // collectTopProcesses returns the top n processes sorted by CPU usage descending.
@@ -377,10 +426,150 @@ func collectTopProcesses(n int) []processEntry {
 	return result
 }
 
+// collectTopByCPU returns the top n processes from all sorted by CPU desc.
+func collectTopByCPU(all []processEntry, n int) []processEntry {
+	type entry struct {
+		cpu float64
+		p   processEntry
+	}
+	var items []entry
+	for _, p := range all {
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(p.cpuPct, "%"), 64)
+		items = append(items, entry{v, p})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].cpu > items[j].cpu })
+	var result []processEntry
+	for i, e := range items {
+		if i >= n {
+			break
+		}
+		result = append(result, e.p)
+	}
+	return result
+}
+
+// collectTopByMemory returns the top n processes from all sorted by RSS desc.
+func collectTopByMemory(all []processEntry, n int) []processEntry {
+	type entry struct {
+		rss int64
+		p   processEntry
+	}
+	var items []entry
+	for _, p := range all {
+		// memStr is like "1.2 GB" — re-parse from the raw rss by reversing fmtBytes is
+		// lossy, so we collect rss separately in collectVerboseProcesses's rawProc.
+		// Instead parse from the memStr field best-effort.
+		items = append(items, entry{parseMemStr(p.memStr), p})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].rss > items[j].rss })
+	var result []processEntry
+	for i, e := range items {
+		if i >= n {
+			break
+		}
+		result = append(result, e.p)
+	}
+	return result
+}
+
+// parseMemStr converts a fmtBytes string (e.g. "1.2 GB", "512 MB") back to bytes
+// for sorting purposes only — precision is not critical.
+func parseMemStr(s string) int64 {
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(fields[0], 64)
+	switch strings.ToUpper(fields[1]) {
+	case "KB":
+		return int64(v * 1024)
+	case "MB":
+		return int64(v * 1024 * 1024)
+	case "GB":
+		return int64(v * 1024 * 1024 * 1024)
+	}
+	return int64(v)
+}
+
+// collectZombieProcesses returns processes in zombie state or with 0% CPU but
+// using > 500 MB RAM (stuck/leaked). Read-only.
+func collectZombieProcesses(all []processEntry) []processEntry {
+	var result []processEntry
+	for _, p := range all {
+		isZombie := strings.HasPrefix(p.state, "Z")
+		cpu, _ := strconv.ParseFloat(strings.TrimSuffix(p.cpuPct, "%"), 64)
+		mem := parseMemStr(p.memStr)
+		isStuck := cpu == 0 && mem > 500*1024*1024
+		if isZombie || isStuck {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// renderProcTable prints a verbose process table with PID, Process, CPU%, Memory, Runtime columns.
+// An optional hint is printed below the table for the first entry.
+func renderProcTable(title string, procs []processEntry) {
+	if len(procs) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(text.Bold.Sprint(title))
+	fmt.Println()
+	tp := table.NewWriter()
+	tp.SetOutputMirror(os.Stdout)
+	tp.SetStyle(table.StyleRounded)
+	tp.AppendHeader(table.Row{"PID", "Process", "CPU %", "Memory", "Runtime"})
+	tp.SetColumnConfigs([]table.ColumnConfig{
+		{Number: 1, WidthMax: 7},
+		{Number: 2, WidthMax: 34},
+		{Number: 3, WidthMax: 8, Align: text.AlignRight},
+		{Number: 4, WidthMax: 10, Align: text.AlignRight},
+		{Number: 5, WidthMax: 12, Align: text.AlignRight},
+	})
+	for _, p := range procs {
+		tp.AppendRow(table.Row{p.pid, p.name, p.cpuPct, p.memStr, p.etime})
+	}
+	tp.Render()
+	if hint := processHint(procs[0].name); hint != "" {
+		fmt.Printf("  %s  %s\n", text.FgHiBlack.Sprint("ℹ"), text.FgHiBlack.Sprint(hint))
+	}
+}
+
+// renderZombieTable prints the zombie/stuck process table with a safety footer.
+func renderZombieTable(procs []processEntry) {
+	if len(procs) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(text.Bold.Sprint("── Zombie / Stuck Processes"))
+	fmt.Println()
+	tp := table.NewWriter()
+	tp.SetOutputMirror(os.Stdout)
+	tp.SetStyle(table.StyleRounded)
+	tp.AppendHeader(table.Row{"PID", "Process", "State", "Memory"})
+	tp.SetColumnConfigs([]table.ColumnConfig{
+		{Number: 1, WidthMax: 7},
+		{Number: 2, WidthMax: 36},
+		{Number: 3, WidthMax: 8},
+		{Number: 4, WidthMax: 10, Align: text.AlignRight},
+	})
+	for _, p := range procs {
+		state := "zombie"
+		if !strings.HasPrefix(p.state, "Z") {
+			state = "stuck"
+		}
+		tp.AppendRow(table.Row{p.pid, p.name, state, p.memStr})
+	}
+	tp.Render()
+	fmt.Println(text.FgHiBlack.Sprint("  ℹ  Zombie/stuck processes are not killed automatically."))
+	fmt.Println(text.FgHiBlack.Sprint("  ℹ  Use Activity Monitor to investigate and force-quit if needed."))
+}
+
 // ─── Overview mode ────────────────────────────────────────────────────────────
 
 // RunOverview collects and displays the system dashboard.
-func RunOverview() {
+func RunOverview(verbose bool) {
 	fmt.Println()
 	fmt.Println(text.Bold.Sprint("🖥  System Dashboard"))
 	fmt.Println(strings.Repeat("─", 56))
@@ -411,8 +600,15 @@ func RunOverview() {
 	collect(7, collectMobileSyncSize)
 
 	// Top processes collected in parallel (outside the WaitGroup metrics fan-out).
+	// In verbose mode we collect all processes once and derive both tables from it.
 	procCh := make(chan []processEntry, 1)
+	verboseProcCh := make(chan []processEntry, 1)
 	go func() { procCh <- collectTopProcesses(5) }()
+	if verbose {
+		go func() { verboseProcCh <- collectVerboseProcesses() }()
+	} else {
+		verboseProcCh <- nil
+	}
 
 	// Spinner while the parallel collectors run — avoids appearing frozen.
 	spinDone := make(chan struct{})
@@ -513,7 +709,13 @@ func RunOverview() {
 
 	// ── Top processes table ──
 	procs := <-procCh
-	if len(procs) > 0 {
+	allProcs := <-verboseProcCh
+
+	if verbose && len(allProcs) > 0 {
+		renderProcTable("── Top Processes (by CPU) — verbose", collectTopByCPU(allProcs, 10))
+		renderProcTable("── Top Processes (by Memory) — verbose", collectTopByMemory(allProcs, 10))
+		renderZombieTable(collectZombieProcesses(allProcs))
+	} else if len(procs) > 0 {
 		fmt.Println()
 		fmt.Println(text.Bold.Sprint("── Top Processes (by CPU)"))
 		fmt.Println()

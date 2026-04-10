@@ -157,9 +157,11 @@ func printUsage() {
 		{
 			"overview",
 			"System dashboard",
-			"Shows CPU, memory, disk usage, top home directories, Homebrew\n" +
-				"                     outdated count, and Docker status — all collected in\n" +
-				"                     parallel and rendered as formatted tables.",
+			"Shows CPU, memory, swap, disk, launch agents, device backups,\n" +
+				"                     top home directories, top processes, Homebrew, and\n" +
+				"                     Docker — all collected in parallel.\n" +
+				"                     Use --verbose for top-10 CPU/memory tables, runtime\n" +
+				"                     column, and zombie/stuck process detection.",
 		},
 		{
 			"safe",

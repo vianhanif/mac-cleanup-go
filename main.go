@@ -9,6 +9,21 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 )
 
+// overviewFlags parses --verbose from os.Args[2:] for the overview command.
+func overviewFlags() (verbose bool) {
+	for _, arg := range os.Args[2:] {
+		switch arg {
+		case "--verbose":
+			verbose = true
+		default:
+			fmt.Printf("\n  %s unknown flag %q for 'overview'\n", text.FgRed.Sprint("\u2717"), arg)
+			fmt.Printf("  Valid flags: --verbose\n\n")
+			os.Exit(1)
+		}
+	}
+	return
+}
+
 // appsFlags parses --list, --dry-run, and --sort-size from os.Args[2:] for the
 // apps command. Exits with an error message for any unrecognised flag so typos
 // never silently skip dry-run mode and trigger a real uninstall.
@@ -51,7 +66,7 @@ func main() {
 
 	switch mode {
 	case "overview":
-		RunOverview()
+		RunOverview(overviewFlags())
 
 	case "safe":
 		results := RunSafe()

@@ -200,6 +200,16 @@ func printUsage() {
 			"Runs brew-analyze first, then brew smart upgrade in one pass.",
 		},
 		{
+			"apps",
+			"App uninstaller",
+			"Lists all non-App-Store applications, lets you select\n" +
+				"                     one or more to remove, then cleanly uninstalls\n" +
+				"                     each one — deleting the .app bundle plus all\n" +
+				"                     associated caches, preferences, containers, and\n" +
+				"                     support files.  Flags: --list (list only),\n" +
+				"                     --dry-run (preview without deleting).",
+		},
+		{
 			"help",
 			"Show this help",
 			"",

@@ -19,6 +19,7 @@ A macOS maintenance tool written in Go with an animated terminal UI featuring li
 | `mac-cleanup brew` | Smart Homebrew upgrade — risk-scored, dependency-aware |
 | `mac-cleanup brew-analyze` | Homebrew package audit — duplicates, stale versions, EOL/clashes |
 | `mac-cleanup brew-full` | `brew-analyze` then `brew` upgrade in one run |
+| `mac-cleanup apps` | List and cleanly uninstall non-App-Store applications |
 | `mac-cleanup help` | Show detailed usage |
 
 Running with no arguments shows the full help screen.
@@ -204,6 +205,75 @@ Results are categorised into **auto-removable**, **prompt**, and **informational
   Apply 1 auto-removable package(s)? [y/N]:
 ```
 
+### `apps`
+
+Scans `/Applications` and `~/Applications` for apps that were **not** installed via the Apple App Store (detected by the absence of a `_MASReceipt/receipt` bundle). Displays a numbered list, lets you pick one or more to remove, confirms once, then deletes the `.app` bundle plus all associated support files.
+
+Support file locations cleaned per app:
+
+| Location | Matched by |
+| --- | --- |
+| `~/Library/Application Support/` | Bundle ID or app name |
+| `~/Library/Caches/` | Bundle ID or app name |
+| `~/Library/Logs/` | Bundle ID or app name |
+| `~/Library/Preferences/` | `<BundleID>.plist` and variants |
+| `~/Library/Containers/` | Bundle ID |
+| `~/Library/Group Containers/` | dirs containing Bundle ID |
+| `~/Library/Saved Application State/` | `<BundleID>.savedState` |
+| `~/Library/WebKit/` | Bundle ID |
+
+Flags:
+
+| Flag | Effect |
+| --- | --- |
+| _(none)_ | Interactive select + uninstall |
+| `--list` | Print the app list only, no prompt |
+| `--dry-run` | Show what would be removed without deleting |
+
+```
+📦 App Uninstaller
+────────────────────────────────────────────────────────
+
+  ✓  42 non-App-Store app(s) found
+
+╭────┬──────────────────┬─────────┬────────────┬─────────────────────────────────╮
+│ #  │ Name             │ Version │ Total Size │ Path                            │
+├────┼──────────────────┼─────────┼────────────┼─────────────────────────────────┤
+│  1 │ Alfred 5         │ 5.5     │    252 MB  │ /Applications/Alfred 5.app      │
+│  2 │ Bear             │ 2.4.1   │     19 MB  │ /Applications/Bear.app          │
+│  3 │ Docker           │ 4.40.0  │    4.1 GB  │ /Applications/Docker.app        │
+│  4 │ iTerm            │ 3.5.10  │     85 MB  │ /Applications/iTerm.app         │
+│  … │ …                │ …       │ …          │ …                               │
+╰────┴──────────────────┴─────────┴────────────┴─────────────────────────────────╯
+
+  Enter app number(s) to uninstall (e.g. 1,3,5  or  all  or  q to quit)
+  > 1,4
+
+  !  The following 2 app(s) will be permanently removed:
+
+    ✗  Alfred 5  (~252 MB)
+       /Applications/Alfred 5.app
+    ✗  iTerm  (~85 MB)
+       /Applications/iTerm.app
+
+  Confirm uninstall? [y/N]: y
+
+── App Uninstall Summary
+
+╭──────────┬───────────┬──────────┬────────┬────────╮
+│ App      │ Status    │ Expected │ Freed  │ Time   │
+├──────────┼───────────┼──────────┼────────┼────────┤
+│ Alfred 5 │ ✓ removed │  252 MB  │ 248 MB │ 0.31s  │
+│ iTerm    │ ✓ removed │   85 MB  │  82 MB │ 0.12s  │
+├──────────┼───────────┼──────────┼────────┼────────┤
+│ Total    │ 2 app(s)  │  337 MB  │ 330 MB │        │
+╰──────────┴───────────┴──────────┴────────┴────────╯
+```
+
+The **Total Size** column in the listing is computed at scan time (`.app` bundle + all support file locations) so you know what to expect before selecting anything. The summary's **Expected** vs **Freed** columns show the pre-deletion estimate against the actual bytes removed — small differences are normal due to OS metadata or files released after process termination.
+
+For `--dry-run`, **Freed** shows `—` and only **Expected** is populated.
+
 ## Safety Guarantees
 
 These are enforced in code at the `safeDelete()` level — not just documentation.
@@ -259,6 +329,8 @@ mac-cleanup-go/
 ├── cleanup.go       — safe + deep modes, parallel task runner
 ├── brew.go          — smart upgrade: risk scoring, auto/prompt/skip
 ├── brew_analyze.go  — 3-pass package audit: duplicates, multi-version, clashes
+├── apps.go          — non-App-Store app discovery, support-path resolution, uninstall
+├── apps_prompt.go   — numbered list table, multi-select prompt, confirm dialog
 ├── summary.go       — rounded summary tables + help screen
 ├── go.mod
 └── go.sum

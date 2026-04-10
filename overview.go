@@ -168,6 +168,93 @@ func collectDocker() metricResult {
 	return metricResult{"Docker", summary, "", true}
 }
 
+func collectSwap() metricResult {
+	out, err := runCmdSimple("sysctl", "vm.swapusage")
+	if err != nil {
+		return metricResult{"Swap", "unavailable", "", false}
+	}
+	// e.g. "vm.swapusage: total = 2048.00M  used = 1536.00M  free = 512.00M  (encrypted)"
+	var used, total string
+	fields := strings.Fields(out)
+	for i, f := range fields {
+		if f == "used" && i+2 < len(fields) {
+			used = fields[i+2]
+		}
+		if f == "total" && i+2 < len(fields) {
+			total = fields[i+2]
+		}
+	}
+	if used == "" {
+		return metricResult{"Swap", "unavailable", "", false}
+	}
+	value := fmt.Sprintf("%s used of %s", used, total)
+	ok := parseSwapMB(used) <= 1024
+	return metricResult{"Swap", value, "", ok}
+}
+
+// parseSwapMB converts a sysctl swap string like "1536.00M" or "2.50G" to MB.
+func parseSwapMB(s string) float64 {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return 0
+	}
+	unit := strings.ToUpper(string(s[len(s)-1]))
+	n, _ := strconv.ParseFloat(s[:len(s)-1], 64)
+	switch unit {
+	case "K":
+		return n / 1024
+	case "M":
+		return n
+	case "G":
+		return n * 1024
+	}
+	return n
+}
+
+func collectLaunchAgents() metricResult {
+	dirs := []string{
+		expandHome("~/Library/LaunchAgents/"),
+		"/Library/LaunchAgents/",
+	}
+	var count int
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".plist") {
+				count++
+			}
+		}
+	}
+	value := fmt.Sprintf("%d item(s)", count)
+	if count > 10 {
+		value += " · review in System Settings → Login Items"
+	}
+	return metricResult{"Launch Agents", value, "", true}
+}
+
+func collectMobileSyncSize() metricResult {
+	dir := expandHome("~/Library/Application Support/MobileSync/Backup/")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return metricResult{"Device Backups", "none found", "", true}
+	}
+	entries, _ := os.ReadDir(dir)
+	var count int
+	for _, e := range entries {
+		if e.IsDir() {
+			count++
+		}
+	}
+	out, err := exec.Command("du", "-sh", dir).Output()
+	if err != nil || len(strings.Fields(string(out))) == 0 {
+		return metricResult{"Device Backups", fmt.Sprintf("%d backup(s)", count), "", true}
+	}
+	size := strings.Fields(string(out))[0]
+	return metricResult{"Device Backups", fmt.Sprintf("%s · %d backup(s)", size, count), "", true}
+}
+
 // ─── Top home directories ────────────────────────────────────────────────────
 
 type dirEntry struct {
@@ -217,6 +304,54 @@ func collectTopDirs(n int) []dirEntry {
 	return result
 }
 
+// ─── Top process entries ──────────────────────────────────────────────────────
+
+type processEntry struct {
+	name   string
+	cpuPct string
+	memStr string
+}
+
+// collectTopProcesses returns the top n processes sorted by CPU usage descending.
+func collectTopProcesses(n int) []processEntry {
+	out, err := runCmdSimple("ps", "-axo", "%cpu,rss,comm")
+	if err != nil {
+		return nil
+	}
+	type rawProc struct {
+		cpu  float64
+		rss  int64 // KB
+		name string
+	}
+	var items []rawProc
+	for _, line := range strings.Split(out, "\n")[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		cpu, _ := strconv.ParseFloat(fields[0], 64)
+		rss, _ := strconv.ParseInt(fields[1], 10, 64)
+		name := fields[2]
+		if cpu == 0 && rss < 1024 {
+			continue
+		}
+		items = append(items, rawProc{cpu, rss, name})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].cpu > items[j].cpu })
+	if len(items) > n {
+		items = items[:n]
+	}
+	var result []processEntry
+	for _, item := range items {
+		result = append(result, processEntry{
+			name:   item.name,
+			cpuPct: fmt.Sprintf("%.1f%%", item.cpu),
+			memStr: fmtBytes(item.rss * 1024),
+		})
+	}
+	return result
+}
+
 // ─── Overview mode ────────────────────────────────────────────────────────────
 
 // RunOverview collects and displays the system dashboard.
@@ -230,7 +365,7 @@ func RunOverview() {
 		order int
 		m     metricResult
 	}
-	ch := make(chan namedMetric, 6)
+	ch := make(chan namedMetric, 8)
 	var wg sync.WaitGroup
 
 	collect := func(order int, fn func() metricResult) {
@@ -246,6 +381,13 @@ func RunOverview() {
 	collect(2, collectDisk)
 	collect(3, collectBrew)
 	collect(4, collectDocker)
+	collect(5, collectSwap)
+	collect(6, collectLaunchAgents)
+	collect(7, collectMobileSyncSize)
+
+	// Top processes collected in parallel (outside the WaitGroup metrics fan-out).
+	procCh := make(chan []processEntry, 1)
+	go func() { procCh <- collectTopProcesses(5) }()
 
 	// Spinner while the parallel collectors run — avoids appearing frozen.
 	spinDone := make(chan struct{})
@@ -269,7 +411,7 @@ func RunOverview() {
 	close(spinDone)
 	close(ch)
 
-	metrics := make([]metricResult, 5)
+	metrics := make([]metricResult, 8)
 	for nm := range ch {
 		metrics[nm.order] = nm.m
 	}
@@ -342,6 +484,27 @@ func RunOverview() {
 		td.Render()
 	} else {
 		fmt.Println("  (could not read home directory sizes)")
+	}
+
+	// ── Top processes table ──
+	procs := <-procCh
+	if len(procs) > 0 {
+		fmt.Println()
+		fmt.Println(text.Bold.Sprint("── Top Processes (by CPU)"))
+		fmt.Println()
+		tp := table.NewWriter()
+		tp.SetOutputMirror(os.Stdout)
+		tp.SetStyle(table.StyleRounded)
+		tp.AppendHeader(table.Row{"Process", "CPU %", "Memory"})
+		tp.SetColumnConfigs([]table.ColumnConfig{
+			{Number: 1, WidthMax: 36},
+			{Number: 2, WidthMax: 8, Align: text.AlignRight},
+			{Number: 3, WidthMax: 10, Align: text.AlignRight},
+		})
+		for _, p := range procs {
+			tp.AppendRow(table.Row{p.name, p.cpuPct, p.memStr})
+		}
+		tp.Render()
 	}
 	fmt.Println()
 }

@@ -208,6 +208,71 @@ func truncate(s string, n int) string {
 
 // ─── Safe mode ────────────────────────────────────────────────────────────────
 
+// cleanDiagnosticReports removes crash/hang report files older than 30 days
+// from ~/Library/Logs/DiagnosticReports/ — recent files are left intact.
+func cleanDiagnosticReports() TaskResult {
+	start := time.Now()
+	dir := expandHome("~/Library/Logs/DiagnosticReports/")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return TaskResult{Name: "Diagnostic Reports", Status: "skipped", Detail: "directory not found", Duration: time.Since(start)}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return TaskResult{Name: "Diagnostic Reports", Status: "error", Detail: err.Error(), Duration: time.Since(start)}
+	}
+	cutoff := time.Now().AddDate(0, 0, -30)
+	var freed int64
+	var removed int
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			p := filepath.Join(dir, e.Name())
+			freed += bytesAt(p)
+			os.Remove(p) //nolint:errcheck
+			removed++
+		}
+	}
+	if removed == 0 {
+		return TaskResult{Name: "Diagnostic Reports", Status: "ok", Detail: "nothing older than 30 days", Duration: time.Since(start)}
+	}
+	detail := fmt.Sprintf("%d file(s) removed, %s freed", removed, fmtBytes(freed))
+	return TaskResult{Name: "Diagnostic Reports", Status: "ok", Detail: detail, BytesFreed: freed, Duration: time.Since(start)}
+}
+
+// reportDeviceBackups reports the size and count of iOS/device backups stored in
+// ~/Library/Application Support/MobileSync/Backup/ without deleting anything.
+func reportDeviceBackups() TaskResult {
+	start := time.Now()
+	dir := expandHome("~/Library/Application Support/MobileSync/Backup/")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return TaskResult{Name: "Device Backups", Status: "skipped", Detail: "no backups found", Duration: time.Since(start)}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return TaskResult{Name: "Device Backups", Status: "error", Detail: err.Error(), Duration: time.Since(start)}
+	}
+	var backups []string
+	for _, e := range entries {
+		if e.IsDir() {
+			info, _ := e.Info()
+			modTime := "unknown"
+			if info != nil {
+				modTime = info.ModTime().Format("2006-01-02")
+			}
+			backups = append(backups, fmt.Sprintf("%s  (last modified %s)", e.Name(), modTime))
+		}
+	}
+	total := bytesAt(dir)
+	detail := fmt.Sprintf("%s total, %d backup(s) — manage in Finder", fmtBytes(total), len(backups))
+	return TaskResult{Name: "Device Backups", Status: "ok", Detail: detail, Paths: backups, Duration: time.Since(start)}
+}
+
 // RunSafe runs the safe cleanup mode.
 func RunSafe() []TaskResult {
 	tasks := []struct {
@@ -218,6 +283,7 @@ func RunSafe() []TaskResult {
 		{"User Logs", cleanUserLogs},
 		{"Xcode DerivedData", cleanXcodeDerivedData},
 		{"TM Snapshots", thinTimeMachineSnapshots},
+		{"Diagnostic Reports", cleanDiagnosticReports},
 	}
 
 	fmt.Println()
@@ -240,8 +306,10 @@ func RunDeep() []TaskResult {
 		{"Xcode DerivedData", cleanXcodeDerivedData},
 		{"Xcode Archives", cleanXcodeArchives},
 		{"TM Snapshots", thinTimeMachineSnapshots},
+		{"Diagnostic Reports", cleanDiagnosticReports},
 		{"Docker Prune", pruneDocker},
 		{"node_modules", reportNodeModules},
+		{"Device Backups", reportDeviceBackups},
 	}
 
 	fmt.Println()
@@ -250,7 +318,7 @@ func RunDeep() []TaskResult {
 
 	results := runCleanTasks(tasks)
 
-	// Print node_modules paths if any were found.
+	// Print node_modules and device backup paths if any were found.
 	for _, r := range results {
 		if r.Name == "node_modules" && len(r.Paths) > 0 {
 			fmt.Println()
@@ -259,6 +327,15 @@ func RunDeep() []TaskResult {
 			for _, p := range r.Paths {
 				fmt.Printf("  %s %s\n", text.FgHiBlack.Sprint("·"), p)
 			}
+		}
+		if r.Name == "Device Backups" && len(r.Paths) > 0 {
+			fmt.Println()
+			fmt.Println(text.Bold.Sprint("── Device Backups"))
+			fmt.Println()
+			for _, p := range r.Paths {
+				fmt.Printf("  %s %s\n", text.FgHiBlack.Sprint("·"), p)
+			}
+			fmt.Println(text.FgHiBlack.Sprint("  Manage in Finder → Go → Library → MobileSync → Backup"))
 		}
 	}
 
